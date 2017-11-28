@@ -1,0 +1,599 @@
+---
+title: "XYZ Health Services -  Text Classification"
+author: "Manish Reddy Jannepally"
+date: "November 24, 2017"
+output:
+  pdf_document: default
+  word_document:
+    fig_height: 4
+    fig_width: 4
+    keep_md: yes
+---
+#INTRODUCTION TO THE XYZ HEALTH SERVICES - TEXT CLASSIFICATION PROJECT
+
+##Problem Statement
+
+To build a classification model based on the Text in the Summary and Description of the call to classify the ticket to appropriate Category (out of 5 Categories) and Subcategories (Out of 20 Sub Categories). 
+
+##Case Study Explanation and Domain Knowledge
+
+XYZ Health Services is a top ranked Health care provider in USA with stellar credentials and provides high quality-care with focus on end-to-end Health care services. The Heath Care Services range from basic medical diagnostics to critical emergency services. 
+
+The provider follows a ticketing system for all the telephonic calls received across all the departments. Calls to the provider can be for New Appointment, Cancellation, Lab Queries, Medical Refills, Insurance Related, General Doctor Advise etc. The Tickets have the details of Summary of the call and description of the calls written by various staff members with no standard text guidelines.
+
+The challenge is, based on the Text in the Summary and Description of the call, the ticket is to be classified to Appropriate Category (out of 5 Categories) and Subcategories (Out of 20 Sub Categories).
+
+##Pain and Gain Analysis
+
+The Pain and Gain analysis of this project needs very subtlety in Perception and Understanding of the communication usually varies from Tone, Body language, Vocabulary and Absurdity levels while communicating.In real world scenarios, a person needs to understand the subtlety of this usage, requires second-order interpretation of the speaker's or writer's intentions; different parts of the brain must work together to understand purpose. 
+ 
+Using Analytics to identify the purpose of the call will be beneficial. This approach will reduce Time Consumption of text classification. Applications are such as analyzing healthcare calls helps reduce the time to classify and escalate to concerned team. 
+ 
+Examples: Optum Labs, an US research collaborative, has collected EHRs of over 30 million patients to create a database for predictive analytics tools that will improve the delivery of care.
+
+#Cleaning and Processing the data
+
+The Given dataset contains **57280 Observations and 7 Variables** - fileid, summary, data, previous appointment, categories, sub categories and ID. The variables fileid and ID will be unique for every ticket, So they are of no use to our model. SUMMARY and DATA are two very important variables which are unstructured form. And in our target variables - categories and subcategories, and previous appoinment variable there is noice which is supposed to be removed.
+
+##Given data for classification
+
+let's look at our given data dimensions and structure.
+
+```{r given data, echo=FALSE,warning=FALSE,message=FALSE,cache=TRUE}
+setwd("C:/Users/janne/Desktop/Edwisor/HealthCare Classification/Text Classification - HealthCare")
+##loading required libraries
+library(data.table);library(plyr);library(dplyr);library(qdap);library(ggplot2);library(tm);library(wordcloud)
+
+##set options
+options(stringsAsFactors = FALSE)
+
+##reading the data
+given_data = fread("TextClassification_Data.csv")
+dim(given_data);
+str(given_data)
+```
+
+From the above output, we can see that the DATA column is in RTF format which needs to be converted to text format. I used **qdap** library to perform this operation. From the structure of the data, the columns categories, sub-categories, previous appointment are characters. I converted them to factor variables. Then, removed the noice in those 3 columns using **plyr** package. SUMMARY and DATA colums are processed and converted to DTMs(Document Term Matrices) and further reduces the sparsity using removeSparseTerms function. Let's process the given data.
+
+##Given data --> Data required --> Processed data
+
+I converted the RTF format to text format using **qdap** package.
+
+```{r DATA column processing,echo=FALSE,cache=TRUE}
+#below operations take more system time for data.table.so converting to just data frame.
+given_data = as.data.frame(given_data)
+
+#removing words starting with punctuation or special characters
+given_data[,3] = gsub("[[:punct:]]\\w+ *",'',given_data[,3])
+given_data[,3] = gsub("[[:punct:]]",'',given_data[,3]) #removing punctuation 
+given_data[,3] = gsub("x\\w+ *",'',given_data[,3]) #removing repeated xxx 
+#given_data =  given_data[1:100,] #took first 100 rows for testing purpose 
+#given_data[,3] = stemmer(given_data[,3]) #played, plays to play 
+given_data[,3] = replace_contraction(given_data[,3]) #isn't to is not 
+given_data[,3] = replace_abbreviation(given_data[,3],abbreviation = qdapDictionaries::abbreviations,
+                                      replace = NULL, ignore.case = TRUE) #Sr. to Senior 
+
+head(given_data$DATA)
+
+#converting back to data.table for faster operations
+given_data = data.table(given_data)
+```
+
+As I said, fileid and ID vairiables are not required, let's remove them and also remove noice in target variables.
+
+```{r visualization, echo=FALSE, cache=TRUE, warning=FALSE,message=FALSE}
+given_data$categories = as.factor(given_data$categories)
+given_data$sub_categories = as.factor(given_data$sub_categories)
+given_data$previous_appointment = as.factor(given_data$previous_appointment)
+##ignoring fileid, ID variables as they are unique for every patient.
+data_req = select(given_data,SUMMARY:previous_appointment)
+dim(data_req);rm(given_data) #removing given_data, as we don't need it.
+data_req$categories =  mapvalues(data_req$categories,from = c("asK_A_DOCTOR",
+                        "mISCELLANEOUS","JUNK"),to = c("ASK_A_DOCTOR","MISCELLANEOUS","MISCELLANEOUS"))
+
+data_req$sub_categories = mapvalues(data_req$sub_categories, 
+                        from = c("mEDICATION RELATED","JUNK"),to = c("MEDICATION RELATED","OTHERS"))
+
+data_req$previous_appointment = mapvalues(data_req$previous_appointment,
+                                from = c("","No","NO","yes","Yes","YES"), to = c(NA,0,0,1,1,1))
+#table(is.na(data_req))
+#sapply(data_req,function(x)sum(is.na(x)))
+#which(is.na(data_req$previous_appointment))
+data_req$previous_appointment[c(14129,16570)] = 0 #imputing the missing values with 0 because >90% are 0
+summary(data_req)
+```
+
+##Cleaning the text
+
+Now, I form 2 corpuses for SUMMARY and DATA columns and clean the text. Below are the steps I performed:
+
+###Case Folding
+
+The first preprocessing step is Case folding. Here, we are converting all the letters in the Corpus to lowercase using R's base function tolower. 
+
+###Remove Numbers
+
+In this step, we are freeing corpus from numbers. Here, we use tm's removeNumbers function
+
+###Removing Stop Words
+
+This step is about eliminating words that doesn't make any meaning. Stopwords of English would be enough, but since the dataset contains several short words in the form of short forms which are of no meaning to use. I used stopwords("en") and stopwords("SMART")
+
+###removing Punchuation 
+
+We have use tm's removePunctuation function to remove all punctuation marks such as comma, full stop, parenthesis, various brackets etc.., from the corpus
+
+###Stemming
+
+For grammatical reasons, document contains different inflectional forms like tense forms and derivational forms, we are performing stemming to reduce all those words to their root word. We are using tm's stemDocument function to do this. Stemming greatly help in reducing total number of terms and increase weighting
+
+###Stripping White Spaces
+
+The above performed preprocessing steps left our corpus with many leading and trailing whitespaces within documents. We are cleaning all of them in one go using tm's stripWhitespace function. With this step our basic preprocessing is completed. 
+
+A user defined function **clean_corpus** is created to do preprocessing and cleaning of the corpus. This function takes in a vector with all the text in it and convert it to a corpus and cleans it
+
+```{r clean corpus, echo=TRUE, cache= TRUE}
+#function for cleaning the corpus
+clean_corpus <- function(data){
+        data_corpus = Corpus(VectorSource(data)) #forming a corpus
+        data_corpus = tm_map(data_corpus,removePunctuation) #removing punchuations
+        data_corpus = tm_map(data_corpus,removeNumbers) #removing numbers
+        data_corpus = tm_map(data_corpus,tolower) #converting to lowercase
+        data_corpus = tm_map(data_corpus,removeWords,stopwords("English")) #removing english stopwords
+        data_corpus = tm_map(data_corpus,removeWords,stopwords("SMART"))
+        data_corpus = tm_map(data_corpus,stemDocument) #performing stemming
+        data_corpus = tm_map(data_corpus,stripWhitespace) #removing the whitespaces
+        
+}
+```
+
+After cleaning the DATA and SUMMARY columns using clean_corpus, form a Document Term Matrix for each corpus.
+
+```{r dtms, echo=FALSE,cache=TRUE}
+data_corpus_SUMMARY = clean_corpus(data_req$SUMMARY)
+data_corpus_DATA = clean_corpus(data_req$DATA)
+
+#generating Document Term Matrices for SUMMARY and DATA columns
+dtm_SUMMARY = DocumentTermMatrix(data_corpus_SUMMARY,control = list(weighting = weightTf))
+dtm_DATA = DocumentTermMatrix(data_corpus_DATA,control = list(weighting = weightTf))
+
+dtm_SUMMARY;dtm_DATA
+```
+
+A Document Term Matrix (DTM) is created from the corpus. Term Frequency is considered as weighting to create Document term matrix to keep DTM simple. DATA DTM has 57280 documents and 73656 terms with 100% sparsity and SUMMARY DTM has 57280 documents and 9750 terms with 100% sparsity.
+
+```{r reduces sparsity, echo=FALSE,cache=FALSE}
+library(tm)
+#removing sparse terms from the Document Term Matrices of SUMMARY and DATA columns
+sparsed_dtm_SUMMARY = removeSparseTerms(dtm_SUMMARY,0.999)
+sparsed_dtm_DATA = removeSparseTerms(dtm_DATA,0.99)
+
+sparsed_dtm_SUMMARY;sparsed_dtm_DATA
+```
+
+Sparsity is reduced and we made 73656+9750 terms to more relevant 510+403 terms. We try to get a balance between number of terms and vector size which R can allocate while processing. This Document term matrices is then converted to Data frame for Feature engineering.
+
+```{r combined dataframe, echo=FALSE, cache=FALSE}
+library(data.table)
+SUMMARY_data = data.table(as.matrix(sparsed_dtm_SUMMARY))
+DATA_data = data.table(as.matrix(sparsed_dtm_DATA))
+dim(SUMMARY_data);dim(DATA_data)
+combined_data = cbind(SUMMARY_data,DATA_data)
+dim(combined_data)
+```
+
+Combined Data frame has 57280 observations and 913 features (excluding target class).
+
+#Exploratory Data Analysis
+
+Let's see the whole data wordcloud
+
+```{r wordcloud whole data,echo=FALSE,cache=TRUE,eval=FALSE,warning=FALSE,message=FALSE}
+#forming a dataset with frquencies in descending order
+word_freq <- sort(colSums(combined_data), decreasing = T)
+word_freq <- data.table(Terms = names(word_freq), frequency = word_freq)
+wordcloud(word_freq$Terms, word_freq$frequency,max.words = 200, scale = c(4,0.75),
+          random.order = F, colors=brewer.pal(8, "Dark2"))
+
+```
+```{r,echo=FALSE,cache=FALSE}
+word_freq <- sort(colSums(combined_data), decreasing = T)
+word_freq <- data.table(Terms = names(word_freq), frequency = word_freq)
+print(paste("Most frequent terms are:"))
+head(word_freq)
+```
+
+We can clearly see 'call', 'patient', 'paragraph', 'note' and 'back' are top 5 most frequent words in the Corpus for whole data set. We further ensure this hypothesis from a bar plot.
+
+```{r barplot,echo=FALSE,cache=TRUE,eval=FALSE}
+#most frequent words in the dataset
+most_freq <- word_freq[frequency>50000]
+# Bar graph for words that are more frequent appearing more than 50000 times
+ggplot(most_freq, aes(Terms, frequency))+
+        geom_bar(stat = 'identity', colour = "grey", fill = 'grey')+
+        labs(title= 'High frequent Terms')
+```
+
+Lets explore category wise worclouds to understand data more clearly.
+
+```{r individual data analysis, cache=TRUE,echo=FALSE,warning=FALSE,message=FALSE,eval=FALSE}
+#subsetting the dataset category wise and cleaning the corresponding corpuses
+categories = data_req$categories
+combined_data_cat = cbind(combined_data,categories)
+#Subsetting the datsets by category
+appoinments = combined_data_cat[(combined_data_cat$categories) == "APPOINTMENTS"]
+ask_a_doctor = combined_data_cat[(combined_data_cat$categories) == "ASK_A_DOCTOR"]
+miscellaneous = combined_data_cat[(combined_data_cat$categories) == "MISCELLANEOUS"]
+lab = combined_data_cat[(combined_data_cat$categories) == "LAB"]
+prescription = combined_data_cat[(combined_data_cat$categories) == "PRESCRIPTION"]
+
+wordcloud(names(appoinments),numcolwise(sum)(appoinments),max.words = 200, scale = c(4,0.75),random.order = F, colors=brewer.pal(8, "Dark2"))
+
+wordcloud(names(ask_a_doctor),numcolwise(sum)(ask_a_doctor),max.words = 200, scale = c(4,0.75),random.order = F, colors=brewer.pal(8, "Dark2"))
+
+wordcloud(names(miscellaneous),numcolwise(sum)(miscellaneous),max.words = 200, scale =c(4,0.75),random.order = F, colors=brewer.pal(8, "Dark2"))
+
+wordcloud(names(lab),numcolwise(sum)(lab),max.words = 200, scale = c(4,0.75),random.order = F, colors=brewer.pal(8, "Dark2"))
+
+wordcloud(names(prescription),numcolwise(sum)(prescription),max.words = 200, scale = c(4,0.75),random.order = F, colors=brewer.pal(8, "Dark2"))
+```
+
+I have explored the individual datasets of each categories to have a better understanding of the generated terms. And also extracted the most common terms between the categories which I used in feature engineering.
+
+###Insights of data set:
+
+- Words like 'call', 'patient', 'note', 'paragraph', 'back' are most common frequent words in all kinds.
+
+- There is a certain amount of noise the both the categories and subcategories, It might be due the improper data entry operations. This noice is removed using **plyr** package.
+
+- There are many common terms between categories which may not be useful to the model. We have to figure out whether to remove most common terms or all common terms.
+
+- Logically, if we build model for categories, it should classify sub-categories as weel. But these is an ideal condition. We have to see how this works practically.
+
+#Feature Engineering
+
+##Removing Corelated Terms
+
+Checking correlation between the predictors is a must in Analysis. We have used tm's findAssocs and pearson's correlation matrix to detect correlation and association.  
+
+A correlation matrix is built representing positive and negative correlations between terms. We have taken 85% as correlation limit and filtered out highly correlated terms from our structured data. Words like "marcia , richardson", "brown , lori", "linda , clark", "tisha , walker", "cook , denni" are highly correlated pairs. A term is taken from each correlation pair and made a vector called corr.terms. 
+
+```{r correlations, echo=FALSE,cache=TRUE,warning=FALSE}
+#Now,lets remove correlated terms from the dataset formed by reduced dtms
+df = combined_data
+corr = data.table(cor(df, use = "complete.obs", method= "pearson"))
+corr.terms <- NULL
+for(i in 1:(nrow(corr)-1)){
+        for(j in (i+1):ncol(corr)){
+                if((abs(corr[[i,j]])>0.85) ==T){
+                        corr.terms = c(corr.terms, names(corr)[i])
+                        #print(paste(colnames(corr)[i],',',colnames(corr)[j])) # print rows and column numbers which are correlated
+                }
+        }
+}
+rm(corr,i,j)
+corr.terms = unique(corr.terms)#correlated terms in combined_data
+print(paste("Number of correlated terms which are to be filtered are:"))
+length(unique(corr.terms))
+```
+
+We have to remove these corelated terms from the variable of our combined_data set.Thus forming a data set without highly (>85%) corelated terms.When I designed a model with the dataset without corelated words, The accuracy is improved by 2-3% only. Let's try to remove the common words between the categories.
+
+When we visualized the wordclouds of each category, there are many common words between the categories. These common words may effect the model accuracy. Let's see how these common words impact our model.
+
+```{r common words,echo=FALSE,cache=FALSE}
+app_df = data_req[(data_req$categories) == "APPOINTMENTS"]
+ask_df = data_req[(data_req$categories) == "ASK_A_DOCTOR"]
+mis_df = data_req[(data_req$categories) == "MISCELLANEOUS"]
+lab_df = data_req[(data_req$categories) == "LAB"]
+pre_df = data_req[(data_req$categories) == "PRESCRIPTION"]
+
+appoinments_corpus_SUMMARY = clean_corpus(app_df$SUMMARY)
+appoinments_corpus_DATA = clean_corpus(app_df$DATA)
+ask_a_doctor_corpus_SUMMARY = clean_corpus(ask_df$SUMMARY)
+ask_a_doctor_corpus_DATA = clean_corpus(ask_df$DATA)
+miscellaneous_corpus_SUMMARY = clean_corpus(mis_df$SUMMARY)
+miscellaneous_corpus_DATA = clean_corpus(mis_df$DATA)
+lab_corpus_SUMMARY = clean_corpus(lab_df$SUMMARY)
+lab_corpus_DATA = clean_corpus(lab_df$DATA)
+prescription_corpus_SUMMARY = clean_corpus(pre_df$SUMMARY)
+prescription_corpus_DATA = clean_corpus(pre_df$DATA)
+
+appoinments_dtm_SUMMARY = DocumentTermMatrix(appoinments_corpus_SUMMARY)
+appoinments_dtm_SUMMARY = removeSparseTerms(appoinments_dtm_SUMMARY,0.999)
+
+appoinments_dtm_DATA = DocumentTermMatrix(appoinments_corpus_DATA)
+appoinments_dtm_DATA = removeSparseTerms(appoinments_dtm_DATA,0.985)
+
+ask_a_doctor_dtm_SUMMARY = DocumentTermMatrix(ask_a_doctor_corpus_SUMMARY)
+ask_a_doctor_dtm_SUMMARY = removeSparseTerms(ask_a_doctor_dtm_SUMMARY,0.999)
+
+ask_a_doctor_dtm_DATA = DocumentTermMatrix(ask_a_doctor_corpus_DATA)
+ask_a_doctor_dtm_DATA = removeSparseTerms(ask_a_doctor_dtm_DATA,0.985)
+
+miscellaneous_dtm_SUMMARY = DocumentTermMatrix(miscellaneous_corpus_SUMMARY)
+miscellaneous_dtm_SUMMARY = removeSparseTerms(miscellaneous_dtm_SUMMARY,0.999)
+
+miscellaneous_dtm_DATA = DocumentTermMatrix(miscellaneous_corpus_DATA)
+miscellaneous_dtm_DATA = removeSparseTerms(miscellaneous_dtm_DATA,0.985)
+
+lab_dtm_SUMMARY = DocumentTermMatrix(lab_corpus_SUMMARY)
+lab_dtm_SUMMARY = removeSparseTerms(lab_dtm_SUMMARY,0.999)
+
+lab_dtm_DATA = DocumentTermMatrix(lab_corpus_DATA)
+lab_dtm_DATA = removeSparseTerms(lab_dtm_DATA,0.985)
+
+prescription_dtm_SUMMARY = DocumentTermMatrix(prescription_corpus_SUMMARY)
+prescription_dtm_SUMMARY = removeSparseTerms(prescription_dtm_SUMMARY,0.999)
+
+prescription_dtm_DATA = DocumentTermMatrix(prescription_corpus_DATA)
+prescription_dtm_DATA = removeSparseTerms(prescription_dtm_DATA,0.985)
+
+#Forming datatables with terms and frequencies category wise
+
+app_freq_SUMMARY = sort(colSums(data.table(as.matrix(appoinments_dtm_SUMMARY))), decreasing = T)
+app_freq_SUMMARY = data.table(Terms = names(app_freq_SUMMARY), frequency = app_freq_SUMMARY)
+rm(appoinments_corpus_SUMMARY,appoinments_dtm_SUMMARY)
+
+ask_freq_SUMMARY = sort(colSums(data.table(as.matrix(ask_a_doctor_dtm_SUMMARY))), decreasing = T)
+ask_freq_SUMMARY = data.table(Terms = names(ask_freq_SUMMARY), frequency = ask_freq_SUMMARY)
+rm(ask_a_doctor_corpus_SUMMARY,ask_a_doctor_dtm_SUMMARY)
+
+mis_freq_SUMMARY = sort(colSums(data.table(as.matrix(miscellaneous_dtm_SUMMARY))), decreasing = T)
+mis_freq_SUMMARY = data.table(Terms = names(mis_freq_SUMMARY), frequency = mis_freq_SUMMARY)
+rm(miscellaneous_corpus_SUMMARY,miscellaneous_dtm_SUMMARY)
+
+lab_freq_SUMMARY = sort(colSums(data.table(as.matrix(lab_dtm_SUMMARY))), decreasing = T)
+lab_freq_SUMMARY = data.table(Terms = names(lab_freq_SUMMARY), frequency = lab_freq_SUMMARY)
+rm(lab_corpus_SUMMARY,lab_dtm_SUMMARY)
+
+pre_freq_SUMMARY = sort(colSums(data.table(as.matrix(prescription_dtm_SUMMARY))), decreasing = T)
+pre_freq_SUMMARY = data.table(Terms = names(pre_freq_SUMMARY), frequency = pre_freq_SUMMARY)
+rm(prescription_corpus_SUMMARY,prescription_dtm_SUMMARY)
+
+app_freq_DATA = sort(colSums(data.table(as.matrix(appoinments_dtm_DATA))), decreasing = T)
+app_freq_DATA = data.table(Terms = names(app_freq_DATA), frequency = app_freq_DATA)
+rm(appoinments_corpus_DATA,appoinments_dtm_DATA)
+
+ask_freq_DATA = sort(colSums(data.table(as.matrix(ask_a_doctor_dtm_DATA))), decreasing = T)
+ask_freq_DATA = data.table(Terms = names(ask_freq_DATA), frequency = ask_freq_DATA)
+rm(ask_a_doctor_corpus_DATA,ask_a_doctor_dtm_DATA)
+
+mis_freq_DATA = sort(colSums(data.table(as.matrix(miscellaneous_dtm_DATA))), decreasing = T)
+mis_freq_DATA = data.table(Terms = names(mis_freq_DATA), frequency = mis_freq_DATA)
+rm(miscellaneous_corpus_DATA,miscellaneous_dtm_DATA)
+
+lab_freq_DATA = sort(colSums(data.table(as.matrix(lab_dtm_DATA))), decreasing = T)
+lab_freq_DATA = data.table(Terms = names(lab_freq_DATA), frequency = lab_freq_DATA)
+rm(lab_corpus_DATA,lab_dtm_DATA)
+
+pre_freq_DATA = sort(colSums(data.table(as.matrix(prescription_dtm_DATA))), decreasing = T)
+pre_freq_DATA = data.table(Terms = names(pre_freq_DATA), frequency = pre_freq_DATA)
+rm(prescription_corpus_DATA,prescription_dtm_DATA)
+
+#Finding the common terms present in any two categories from SUMMARY column
+common_SUMMARY = app_freq_SUMMARY[app_freq_SUMMARY$Terms %in% ask_freq_SUMMARY$Terms,]
+common_SUMMARY = rbind(app_freq_SUMMARY[app_freq_SUMMARY$Terms %in%  mis_freq_SUMMARY$Terms,])
+common_SUMMARY = rbind(app_freq_SUMMARY[app_freq_SUMMARY$Terms %in% lab_freq_SUMMARY$Terms,])
+common_SUMMARY = rbind(app_freq_SUMMARY[app_freq_SUMMARY$Terms %in% pre_freq_SUMMARY$Terms,])
+common_SUMMARY = rbind(ask_freq_SUMMARY[ask_freq_SUMMARY$Terms %in% mis_freq_SUMMARY$Terms,]) 
+common_SUMMARY = rbind(ask_freq_SUMMARY[ask_freq_SUMMARY$Terms %in% lab_freq_SUMMARY$Terms,]) 
+common_SUMMARY = rbind(ask_freq_SUMMARY[ask_freq_SUMMARY$Terms %in% pre_freq_SUMMARY$Terms,]) 
+common_SUMMARY = rbind(mis_freq_SUMMARY[mis_freq_SUMMARY$Terms %in% lab_freq_SUMMARY$Terms,]) 
+common_SUMMARY = rbind(mis_freq_SUMMARY[mis_freq_SUMMARY$Terms %in% pre_freq_SUMMARY$Terms,]) 
+common_SUMMARY = rbind(lab_freq_SUMMARY[lab_freq_SUMMARY$Terms %in% pre_freq_SUMMARY$Terms,])
+
+
+#Finding the common terms present in any two categories from DATA column
+common_DATA = app_freq_DATA[app_freq_DATA$Terms %in% ask_freq_DATA$Terms,] 
+common_DATA = rbind(app_freq_DATA[app_freq_DATA$Terms %in% mis_freq_DATA$Terms,]) 
+common_DATA = rbind(app_freq_DATA[app_freq_DATA$Terms %in% lab_freq_DATA$Terms,]) 
+common_DATA = rbind(app_freq_DATA[app_freq_DATA$Terms %in% pre_freq_DATA$Terms,]) 
+common_DATA = rbind(ask_freq_DATA[ask_freq_DATA$Terms %in% mis_freq_DATA$Terms,]) 
+common_DATA = rbind(ask_freq_DATA[ask_freq_DATA$Terms %in% lab_freq_DATA$Terms,]) 
+common_DATA = rbind(ask_freq_DATA[ask_freq_DATA$Terms %in% pre_freq_DATA$Terms,]) 
+common_DATA = rbind(mis_freq_DATA[mis_freq_DATA$Terms %in% lab_freq_DATA$Terms,]) 
+common_DATA = rbind(mis_freq_DATA[mis_freq_DATA$Terms %in% pre_freq_DATA$Terms,]) 
+common_DATA = rbind(lab_freq_DATA[lab_freq_DATA$Terms %in% pre_freq_DATA$Terms,])
+
+common = rbind(common_DATA,common_SUMMARY) #combining both the common terms
+#common = common[order(common$frequency,decreasing = TRUE)]
+print(paste("Some of common terms between the categories are:"))
+head(common)
+```
+
+corr.terms are combined with common_unique words and together removed from the data.
+
+```{r removing corr.terms, echo=FALSE,cache=TRUE}
+df = combined_data
+common = common[1:10] #extractin only top 100 most frequent common terms
+common_unique = unique(common$Terms)
+unneccessary_words = unique(c(corr.terms,common_unique))
+del_col = df[,!(names(df) %in% unneccessary_words)]
+df = as.data.frame(df) #converting to data.frame as data.table takes time
+df = df[,del_col]
+print(paste("Dimensions of data after removing corelated terms and top most common terms are:"))
+dim(df)
+```
+
+Now that we have removed the most common terms and correlated terms (%85), we have our final features to predict the target variables. Our final no of variable are 858. We are going to form two master data sets each for predicting categories and sub-categories.
+
+# Sampling the Master dataset and train & tests set from sample
+
+The function sampling(), from the master data set samples it and returns train and test sets required from the sample.  We are using **stratified sampling** to preserve this ratio throughout sampling and splitting. **caTools** package is used to implement stratified sampling.
+
+```{r sampling function, echo=TRUE,cache=TRUE}
+library(caTools)
+categories = data_req$categories
+sub_categories = data_req$sub_categories
+previous_appointment = data_req$previous_appointment
+master_data_cat= as.data.frame(cbind(df,previous_appointment,sub_categories,categories))
+master_data_sub = as.data.frame(cbind(df,previous_appointment,sub_categories))
+
+sampling <- function(master_data, set_seed = 123, samp.ratio= 0.075, train.ratio= 0.75){
+        set.seed(seed = set_seed)
+        samp_split = sample.split(master_data[,ncol(master_data)], samp.ratio)
+        sample = subset(master_data, samp_split == T)
+        
+        # training and testing 
+        smpl = sample.split(sample[,ncol(sample)], train.ratio)
+        x_train = subset(sample, smpl == T )
+        x_test  = subset(sample, smpl == F )
+        y_train = x_train[,ncol(x_train)]
+        y_test = x_test[,ncol(x_test)]
+        x_train[,ncol(x_train)] = NULL
+        x_test[,ncol(x_test)] = NULL
+        train_test = list(x_train,x_test,y_train,y_test)
+        return(train_test)
+}
+```
+```{r train and test sets for categories and sub categories, echo=FALSE,cache=TRUE}
+train_test_cat = sampling(master_data = master_data_cat,555)
+x_train_cat = train_test_cat[[1]]
+x_test_cat = train_test_cat[[2]]
+y_train_cat = train_test_cat[[3]]
+y_test_cat = train_test_cat[[4]]
+rm(train_test_cat)
+print(paste("Dimensions of each train and test sets for classifying categories excluding target variable are:"))
+dim(x_train_cat);dim(x_test_cat)
+
+train_test_sub = sampling(master_data = master_data_sub,555)
+x_train_sub = train_test_sub[[1]]
+x_test_sub = train_test_sub[[2]]
+y_train_sub = train_test_sub[[3]]
+y_test_sub = train_test_sub[[4]]
+rm(train_test_sub)
+print(paste("Dimensions of each train and test sets for classifying categories excluding target variable are:"))
+dim(x_train_sub);dim(x_test_sub)
+```
+
+We can take different samples with different seeds to train the model.We are taking 10 samples of master data set and train our models using set.seed function. We are considering Naïve Bayes as our Base model which is very significant in Text classification because of its assumption of considering all variables equally important and independent. Random forest model is our ensemble model in this analysis. As Random forest can handle numeric and factor data, we are providing both for a given sample and validate the performance. 
+
+All the models are trained with 4295 X 860 sample and split to 3223 X 860 Training and 1072 X 860 Testing sets(including target variable). 
+
+#Model building and tuning
+
+We have modelled SVM, Random Forest, Naive Bayes and Logistic regression models as an experiment. Principal component analysis is done, but they proved to be futile while modelling and hard to do PCA on huge data with R. 
+
+After Evaluating all these with **Naïve Bayes** model, **Random Forest** model and **SVM** model with 10 samples of data, we are more inclined to choose **SVM** as our model to freeze for our analysis though the accuracy Random Forest is more than SVM because Random Forest's system time is ~3.7 times the system time taken by SVM model.
+
+##SVM Model
+
+We are training with SVM as it uses a subset of training points in the decision function (called support vectors), so it is also memory efficient and also works really well with clear margin of seperation.
+
+SVM trained on 10 samples drawn with different seed gave a highest accuracy of **92%** for classifying categories and **48%** for classifying sub categories.
+
+Note: If we use categories as an independent variable in classifying sub categories, then the SVM is classifying the sub categories with 65% accuracy.
+
+```{r SVM, echo=FALSE,cache=TRUE}
+#SVM
+library(e1071)
+library(caret)
+x_cat = cbind(x_train_cat,y_train_cat)
+fit_cat = svm(y_train_cat ~., data = x_cat)
+pred_cat = predict(fit_cat,x_test_cat)
+summary(pred_cat)
+confusionMatrix(pred_cat,y_test_cat)
+
+x_sub = cbind(x_train_sub,y_train_sub)
+fit_sub = svm(y_train_sub ~., data = x_sub)
+pred_sub = predict(fit_sub,x_test_sub)
+summary(pred_sub)
+x = confusionMatrix(pred_sub,y_test_sub)
+x$overall
+```
+
+##Naive Bayes
+
+```{r naive bayes,echo=FALSE,cache=TRUE,eval=FALSE}
+#if you want to evaluate naive bayes model, make eval = TRUE above.
+library(e1071)
+library(caret)
+x_cat = cbind(x_train_cat,y_train_cat)
+nb_cat = naiveBayes(y_train_cat ~., data = x_cat)
+nb_pred_cat = predict(nb_cat,x_test_cat)
+summary(nb_pred_cat)
+confusionMatrix(nb_pred_cat,y_test_cat)
+
+x_sub = cbind(x_train_sub,y_train_sub)
+nb_sub = svm(y_train_sub ~., data = x_sub)
+nb_pred_sub = predict(nb_sub,x_test_sub)
+summary(nb_pred_sub)
+y = confusionMatrix(nb_pred_sub,y_test_sub)
+y$overall
+```
+
+##Random Forest
+
+We have used h2o package to build random forest models as it is really quick in training a model using h2o.Random forest is flexible and can enhance the accuracy/performance of the weak algorithm to a better extent, at the expense of heavier computational resources required.
+
+Using h2o, when trained with random forests, we got a highest accuracy of **99%** for classifying categories and **65%** accuracy for classifying sub categories. But with the same sample size used for SVM, the system time for random forest is ~3.7 times the system time taken by SVM.
+
+Note: If we use categories as an independent variable in classifying sub categories, then the Random Forest is classifying the sub categories with 82% accuracy.
+
+```{r random forest,echo=FALSE, cache=TRUE,warning=FALSE, message=FALSE}
+library(h2o)
+library(caret)
+## Create an H2O cloud 
+h2o.init(
+        nthreads=-1,            ## -1: use all available threads
+        max_mem_size = "2G")    ## specify the memory size for the H2O cloud
+h2o.removeAll() # Clean slate - just in case the cluster was already running
+
+#check h2o cluster status
+h2o.init()
+
+set.seed(123)
+#Random Forest for categories and sub categories
+p = cbind(x_train_cat,y_train_cat)
+q = cbind(x_train_sub,y_train_sub)
+a = cbind(x_test_cat,y_test_cat)
+b = cbind(x_test_sub,y_test_sub)
+
+# loading data to h2o clusters
+h_train_cat = as.h2o(p)
+h_train_sub = as.h2o(q)
+h_test_cat = as.h2o(a)
+h_test_sub = as.h2o(b)
+
+# creating predictor and target indices
+x_cat = 1:ncol(p)-1
+y_cat = ncol(p)
+
+#creating predictor and target indices
+x_sub = 1:ncol(q)-1
+y_sub = ncol(q)
+
+# Building random forest model for categories
+rf_model_cat = h2o.randomForest(x=x_cat, y=y_cat, training_frame = h_train_cat, ntrees = 1000)
+pred_cat <- as.data.frame(h2o.predict(rf_model_cat, h_test_cat))
+summary(pred_cat)
+
+confusionMatrix(pred_cat$predict,y_test_cat)
+
+# Building random forest model for sub categories
+rf_model_sub = h2o.randomForest(x=x_sub, y=y_sub, training_frame = h_train_sub, ntrees = 1000)
+pred_sub <- as.data.frame(h2o.predict(rf_model_sub, h_test_sub))
+summary(pred_sub)
+
+m = confusionMatrix(pred_sub$predict,y_test_sub)
+m$overall
+
+# shuting down h2o cluster
+h2o.shutdown(prompt = F)
+```
+
+#Error Metrics
+
+As there might be situations when a patient calling for emergency situations might be misclassified as the one with least priority value and a situation where the patient is calling for general advices is put on the top of the priority order for immediate attention from the Doctor. So, we consider both False Positive and False Negative and take them as whole as Misclassification error and minimize it. 
+ 
+We are aiming to freeze the model which is giving least misclassification error with the minimal computatinal power and time. So, the model and seed with highest accuracy is considered to be our model of Deployment. 
+ 
+So, **SVM** with seed **555** has freeze as our deployment model with an accuracy of 92% for classifying categories.
+
+#Recommendations
+
+If we analyze the Document Term Matrices generated out of the SUMMARY and DATA column along with sub categories, there are many common terms between those 20 sub categories. This makes the problem more complex because the common terms misguide the models. 
+
+If we try to remove the common terms between the sub categories, we are left with very few terms as we have only 57280 rows, which won't contribute much to the classification. So, I would suggest designing a model separately for classifying sub-categories with much more data. More data always yields the better results though it is complicated to clean it.
