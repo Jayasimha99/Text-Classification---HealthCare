@@ -4,3 +4,18 @@ XYZ Health Services is a top ranked Health care provider in USA with stellar cre
 
 
 The challenge is, based on the Text in the Summary and Description of the call, the ticket is to be classified to Appropriate Category (out of 5 Categories) and Subcategories (Out of 20 Sub Categories). 
+
+NOTE: Download Project_writeup.Rmd file and run in R Studio, You can reproduce the model exactly as I did.
+
+You can also run the R codes in R Codes file as below order to reproduce the model.
+                    1_Loading_and_Preping_the_data.R
+                    2_Cleaning_the_text.R
+                    3_Exploratory_Data_Analysis.R
+                    4_Feature_Engineering.R
+                    5_Train_and_Test.R
+                    SVM_model_training.R
+                    SVM_model_evaluation.R
+                    RF_model_training.R
+                    RF_model_evaluation.R
+                    NaiveBayes_model_training.R
+                    NaiveBayes_model_evaluation.R
